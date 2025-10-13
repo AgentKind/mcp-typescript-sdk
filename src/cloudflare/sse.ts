@@ -1,0 +1,184 @@
+import {
+    SSEServerTransport,
+    type SSEServerTransportOptions,
+    type SSEConnectionAdapter
+} from '../server/sse.js';
+import type { AuthInfo } from '../server/auth/types.js';
+import type { MessageExtraInfo } from '../types.js';
+import contentType from 'content-type';
+
+const DEFAULT_SSE_HEADERS = {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive'
+};
+
+interface StreamConnection {
+    adapter: SSEConnectionAdapter;
+    createResponse(): Response;
+    dispose(): void;
+}
+
+function createStreamConnection(signal?: AbortSignal): StreamConnection {
+    const headers = new Headers(DEFAULT_SSE_HEADERS);
+    const encoder = new TextEncoder();
+    const closeListeners = new Set<() => void>();
+    let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+    let closed = false;
+    let abortHandler: (() => void) | null = null;
+    let response: Response | null = null;
+
+    const finish = (action: 'close' | 'error' = 'close', error?: Error) => {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        if (abortHandler && signal) {
+            signal.removeEventListener('abort', abortHandler);
+            abortHandler = null;
+        }
+
+        if (action === 'error' && controller) {
+            controller.error(error ?? new Error('Client disconnected'));
+        } else {
+            controller?.close();
+        }
+        closeListeners.forEach(listener => listener());
+        closeListeners.clear();
+    };
+
+    const stream = new ReadableStream<Uint8Array>({
+        start(startController) {
+            controller = startController;
+            if (signal) {
+                abortHandler = () => finish('error', new Error('Client disconnected'));
+                signal.addEventListener('abort', abortHandler, { once: true });
+            }
+        },
+        cancel() {
+            finish();
+        }
+    });
+
+    const adapter: SSEConnectionAdapter = {
+        async setHeaders(custom: Record<string, string>): Promise<void> {
+            for (const [key, value] of Object.entries(custom)) {
+                headers.set(key, value);
+            }
+        },
+        async write(data: string): Promise<void> {
+            if (closed) {
+                return;
+            }
+            controller?.enqueue(encoder.encode(data));
+        },
+        async end(data?: string): Promise<void> {
+            if (closed) {
+                return;
+            }
+            if (data) {
+                await adapter.write(data);
+            }
+            finish();
+        },
+        onClose(handler: () => void): void {
+            if (closed) {
+                handler();
+                return;
+            }
+            closeListeners.add(handler);
+        }
+    };
+
+    return {
+        adapter,
+        createResponse(): Response {
+            if (!response) {
+                response = new Response(stream, { headers });
+            }
+            return response;
+        },
+        dispose(): void {
+            finish();
+        }
+    };
+}
+
+export interface CreateFetchSSESessionOptions {
+    transportOptions?: SSEServerTransportOptions;
+    signal?: AbortSignal;
+}
+
+export interface FetchSSESession {
+    transport: SSEServerTransport;
+    response: Response;
+}
+
+export async function createFetchSSESession(
+    endpoint: string,
+    options: CreateFetchSSESessionOptions = {}
+): Promise<FetchSSESession> {
+    const connection = createStreamConnection(options.signal);
+    const transport = new SSEServerTransport(endpoint, connection.adapter, options.transportOptions);
+
+    try {
+        await transport.start();
+        return {
+            transport,
+            response: connection.createResponse()
+        };
+    } catch (error) {
+        connection.dispose();
+        throw error;
+    }
+}
+
+export interface HandleFetchSSEPostOptions {
+    authInfo?: AuthInfo;
+}
+
+export async function handleFetchSSEPost(
+    request: Request,
+    transport: SSEServerTransport,
+    options: HandleFetchSSEPostOptions = {}
+): Promise<Response> {
+    let mediaType: string;
+    try {
+        mediaType = contentType.parse(request.headers.get('content-type') ?? '').type;
+    } catch (error) {
+        return new Response(String(error), { status: 400 });
+    }
+
+    if (mediaType !== 'application/json') {
+        return new Response(`Unsupported content-type: ${mediaType}`, { status: 400 });
+    }
+
+    const bodyText = await request.text();
+    let parsedBody: unknown;
+    try {
+        parsedBody = JSON.parse(bodyText);
+    } catch {
+        return new Response(`Invalid message: ${bodyText}`, { status: 400 });
+    }
+
+    const extra: MessageExtraInfo = {
+        requestInfo: { headers: headersToObject(request.headers) },
+        authInfo: options.authInfo
+    };
+
+    try {
+        await transport.handleMessage(parsedBody, extra);
+    } catch {
+        return new Response(`Invalid message: ${bodyText}`, { status: 400 });
+    }
+
+    return new Response('Accepted', { status: 202 });
+}
+
+function headersToObject(headers: Headers): Record<string, string> {
+    const result: Record<string, string> = {};
+    headers.forEach((value, key) => {
+        result[key.toLowerCase()] = value;
+    });
+    return result;
+}

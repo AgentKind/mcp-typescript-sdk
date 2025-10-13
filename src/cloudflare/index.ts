@@ -4,4 +4,4 @@ export {
     type CreateFetchSSESessionOptions,
     type FetchSSESession,
     type HandleFetchSSEPostOptions
-} from '../../cloudflare/sse.js';
+} from './sse.js';

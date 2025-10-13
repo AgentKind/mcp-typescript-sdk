@@ -20,14 +20,14 @@
 
 ## 3. Why a New Transport Is Necessary (and Not Sufficient on Its Own)
 
-* **Transport layer.** A Fetch-compatible adapter now reuses `SSEServerTransport` by providing a stream implementation backed by the Web Streams API. This keeps the core server untouched while letting Workers and browsers participate in SSE without a bespoke transport class.【F:src/server/transports/fetchSse.ts†L1-L169】
+* **Transport layer.** A Fetch-compatible adapter now reuses `SSEServerTransport` by providing a stream implementation backed by the Web Streams API. This keeps the core server untouched while letting Workers and browsers participate in SSE without a bespoke transport class.【F:src/cloudflare/sse.ts†L1-L170】
 * **Packaging constraints.** Even with the adapter, bundlers will still pull Node-only files unless we provide separate entry points (e.g., `package.json` exports for `./server/node` vs `./server/edge`). Installing the current package in a browser bundler fails because it eagerly resolves `node:http`, so conditional exports remain a requirement to avoid forking the SDK.
 * **Shared utilities.** Crypto, body parsing, and header helpers must be rewritten against Web APIs (Fetch & Web Crypto). Cloudflare supports these APIs already; browsers need polyfills only when hosting OAuth or long-lived sessions.
 
 ## 4. Minimal Refactor Plan
 
-1. **Transport modules.** Keep `SSEServerTransport` as the shared core and add thin adapters (Fetch today, postMessage next) under `src/server/transports/`. Re-export them through `server/transports/index.ts` so bundlers can tree-shake per environment.【F:src/server/transports/index.ts†L1-L7】
-2. **Utility shims.** Create shared helpers for headers, streaming bodies, and crypto so both Node and Worker adapters depend on runtime-neutral code. The Fetch adapter already normalizes headers into plain objects for the server core.【F:src/server/transports/fetchSse.ts†L108-L169】
+1. **Transport modules.** Keep `SSEServerTransport` as the shared core and add thin adapters (Fetch today, postMessage next) under `src/cloudflare/` (Workers) and future browser-specific directories. Re-export them through `server/transports/index.ts` so bundlers can tree-shake per environment.【F:src/server/transports/index.ts†L1-L7】【F:src/cloudflare/index.ts†L1-L6】
+2. **Utility shims.** Create shared helpers for headers, streaming bodies, and crypto so both Node and Worker adapters depend on runtime-neutral code. The Fetch adapter already normalizes headers into plain objects for the server core.【F:src/cloudflare/sse.ts†L129-L170】
 3. **Conditional exports.** Update `package.json` to expose `@modelcontextprotocol/sdk/server/transports/edge` (Fetch SSE, upcoming postMessage) alongside the existing Node exports. This lets browser bundlers avoid Node entry points without copying the entire codebase.
 4. **Authentication split.** Keep OAuth in a Node/Worker-only subpath. Browser builds should omit OAuth entirely; Cloudflare Workers can receive redirects by registering a dedicated Fetch handler that uses Web Crypto to validate PKCE. This keeps OAuth support for Workers without blocking browser adoption.
 
@@ -40,7 +40,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
     createFetchSSESession,
     handleFetchSSEPost
-} from '@modelcontextprotocol/sdk/server/transports/index.js';
+} from '@modelcontextprotocol/sdk/cloudflare/index.js';
 import { z } from 'zod';
 
 const server = new McpServer({ name: 'cf-worker-demo', version: '0.1.0' });

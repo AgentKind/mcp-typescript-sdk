@@ -2,8 +2,8 @@ import { McpServer } from '../server/mcp.js';
 import {
     createFetchSSESession,
     handleFetchSSEPost
-} from '../server/transports/index.js';
-import { SSEServerTransport } from '../server/sse.js';
+} from '../cloudflare/index.js';
+import type { SSEServerTransport } from '../server/sse.js';
 import { z } from 'zod';
 
 const server = new McpServer({

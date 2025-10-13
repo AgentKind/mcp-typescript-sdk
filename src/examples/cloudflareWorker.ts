@@ -1,11 +1,17 @@
 import { McpServer } from '../server/mcp.js';
-import { WorkerFetchTransport } from '../server/transports/index.js';
+import {
+    createFetchSSESession,
+    handleFetchSSEPost
+} from '../server/transports/index.js';
+import { SSEServerTransport } from '../server/sse.js';
 import { z } from 'zod';
 
 const server = new McpServer({
     name: 'cf-worker-demo',
     version: '0.1.0'
 });
+
+const sessions = new Map<string, SSEServerTransport>();
 
 server.registerTool(
     'echo',
@@ -25,38 +31,33 @@ server.registerTool(
 
 export default {
     async fetch(request: Request): Promise<Response> {
-        const transport = new WorkerFetchTransport({ responseTimeoutMs: 5000 });
-        await server.connect(transport);
+        const url = new URL(request.url);
 
-        try {
-            const workerResponse = await transport.handleRequest({
-                method: request.method,
-                headers: request.headers,
-                text: () => request.text()
+        if (request.method === 'GET' && url.pathname === '/sse') {
+            const { transport, response } = await createFetchSSESession('/messages', {
+                signal: request.signal
             });
 
-            await transport.close();
-            return new Response(workerResponse.body, {
-                status: workerResponse.status,
-                headers: workerResponse.headers
-            });
-        } catch (error) {
-            await transport.close();
-            return new Response(
-                JSON.stringify({
-                    jsonrpc: '2.0',
-                    error: {
-                        code: -32603,
-                        message: error instanceof Error ? error.message : 'Unknown error'
-                    }
-                }),
-                {
-                    status: 500,
-                    headers: {
-                        'content-type': 'application/json'
-                    }
-                }
-            );
+            sessions.set(transport.sessionId, transport);
+            transport.onclose = () => sessions.delete(transport.sessionId);
+            await server.connect(transport);
+            return response;
         }
+
+        if (request.method === 'POST' && url.pathname === '/messages') {
+            const sessionId = url.searchParams.get('sessionId');
+            if (!sessionId) {
+                return new Response('Missing sessionId', { status: 400 });
+            }
+
+            const transport = sessions.get(sessionId);
+            if (!transport) {
+                return new Response('Unknown session', { status: 404 });
+            }
+
+            return handleFetchSSEPost(request, transport);
+        }
+
+        return new Response('Not found', { status: 404 });
     }
 };

@@ -6,6 +6,7 @@ import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { z } from 'zod';
 import { CallToolResult, JSONRPCMessage } from 'src/types.js';
+import { createFetchSSESession, handleFetchSSEPost } from './transports/fetchSse.js';
 
 const createMockResponse = () => {
     const res = {
@@ -706,5 +707,50 @@ describe('SSEServerTransport', () => {
                 expect(mockHandleRes3.end).toHaveBeenCalledWith('Accepted');
             });
         });
+    });
+});
+
+describe('Fetch SSE adapter', () => {
+    const decoder = new TextDecoder();
+
+    it('creates a streaming response that emits endpoint and message events', async () => {
+        const { transport, response } = await createFetchSSESession('/messages');
+        const reader = response.body?.getReader();
+        expect(reader).toBeDefined();
+        if (!reader) {
+            throw new Error('Missing stream reader');
+        }
+
+        const firstChunk = await reader.read();
+        expect(firstChunk.done).toBe(false);
+        expect(decoder.decode(firstChunk.value)).toContain('event: endpoint');
+
+        const message: JSONRPCMessage = { jsonrpc: '2.0', method: 'ping', id: 1 };
+        await transport.send(message);
+
+        const secondChunk = await reader.read();
+        expect(secondChunk.done).toBe(false);
+        expect(decoder.decode(secondChunk.value)).toContain('event: message');
+
+        await transport.close();
+        await reader.cancel();
+    });
+
+    it('forwards POST payloads to the transport', async () => {
+        const { transport } = await createFetchSSESession('/messages');
+        const onmessage = jest.fn();
+        transport.onmessage = onmessage;
+
+        const request = new Request('https://example.com/messages', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', method: 'ping', id: 1 })
+        });
+
+        const response = await handleFetchSSEPost(request, transport);
+        expect(response.status).toBe(202);
+        expect(onmessage).toHaveBeenCalledTimes(1);
+
+        await transport.close();
     });
 });

@@ -1,13 +1,86 @@
-import { randomUUID } from 'node:crypto';
-import { IncomingMessage, ServerResponse } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Transport } from '../shared/transport.js';
 import { JSONRPCMessage, JSONRPCMessageSchema, MessageExtraInfo, RequestInfo } from '../types.js';
-import getRawBody from 'raw-body';
 import contentType from 'content-type';
 import { AuthInfo } from './auth/types.js';
-import { URL } from 'url';
 
-const MAXIMUM_MESSAGE_SIZE = '4mb';
+const MAXIMUM_MESSAGE_BYTES = 4 * 1024 * 1024;
+
+export interface SSEConnectionAdapter {
+    setHeaders(headers: Record<string, string>): void | Promise<void>;
+    write(data: string): void | Promise<void>;
+    end(data?: string): void | Promise<void>;
+    onClose(handler: () => void): void;
+}
+
+class NodeResponseConnection implements SSEConnectionAdapter {
+    constructor(private readonly res: ServerResponse) {}
+
+    setHeaders(headers: Record<string, string>): void {
+        this.res.writeHead(200, headers);
+    }
+
+    write(data: string): void {
+        this.res.write(data);
+    }
+
+    end(data?: string): void {
+        this.res.end(data);
+    }
+
+    onClose(handler: () => void): void {
+        this.res.on('close', handler);
+    }
+}
+
+function resolveConnection(res: ServerResponse | SSEConnectionAdapter): SSEConnectionAdapter {
+    if (typeof (res as ServerResponse).writeHead === 'function') {
+        return new NodeResponseConnection(res as ServerResponse);
+    }
+
+    return res as SSEConnectionAdapter;
+}
+
+function generateSessionId(): string {
+    if (typeof globalThis.crypto !== 'undefined' && typeof globalThis.crypto.randomUUID === 'function') {
+        return globalThis.crypto.randomUUID();
+    }
+
+    // Fall back to a simple UUID v4 polyfill if Web Crypto is unavailable. This code path
+    // is retained for backwards compatibility with older Node versions.
+    const template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx';
+    return template.replace(/[xy]/g, c => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+}
+
+function readIncomingMessage(req: IncomingMessage, encoding: BufferEncoding): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        let totalLength = 0;
+
+        req.on('data', chunk => {
+            const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            totalLength += bufferChunk.byteLength;
+
+            if (totalLength > MAXIMUM_MESSAGE_BYTES) {
+                reject(new Error('Request body exceeds maximum size of 4mb'));
+                req.destroy();
+                return;
+            }
+
+            chunks.push(bufferChunk);
+        });
+
+        req.on('end', () => {
+            resolve(Buffer.concat(chunks).toString(encoding));
+        });
+
+        req.on('error', reject);
+    });
+}
 
 /**
  * Configuration options for SSEServerTransport.
@@ -35,12 +108,13 @@ export interface SSEServerTransportOptions {
 /**
  * Server transport for SSE: this will send messages over an SSE connection and receive messages from HTTP POST requests.
  *
- * This transport is only available in Node.js environments.
+ * This transport now supports any runtime that provides an `SSEConnectionAdapter` implementation.
  */
 export class SSEServerTransport implements Transport {
-    private _sseResponse?: ServerResponse;
+    private readonly _connection: SSEConnectionAdapter;
     private _sessionId: string;
     private _options: SSEServerTransportOptions;
+    private _started = false;
     onclose?: () => void;
     onerror?: (error: Error) => void;
     onmessage?: (message: JSONRPCMessage, extra?: MessageExtraInfo) => void;
@@ -50,11 +124,12 @@ export class SSEServerTransport implements Transport {
      */
     constructor(
         private _endpoint: string,
-        private res: ServerResponse,
+        res: ServerResponse | SSEConnectionAdapter,
         options?: SSEServerTransportOptions
     ) {
-        this._sessionId = randomUUID();
+        this._sessionId = generateSessionId();
         this._options = options || { enableDnsRebindingProtection: false };
+        this._connection = resolveConnection(res);
     }
 
     /**
@@ -92,11 +167,13 @@ export class SSEServerTransport implements Transport {
      * This should be called when a GET request is made to establish the SSE stream.
      */
     async start(): Promise<void> {
-        if (this._sseResponse) {
+        if (this._started) {
             throw new Error('SSEServerTransport already started! If using Server class, note that connect() calls start() automatically.');
         }
 
-        this.res.writeHead(200, {
+        this._started = true;
+
+        await this._connection.setHeaders({
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache, no-transform',
             Connection: 'keep-alive'
@@ -112,11 +189,9 @@ export class SSEServerTransport implements Transport {
         // Reconstruct the relative URL string (pathname + search + hash)
         const relativeUrlWithSession = endpointUrl.pathname + endpointUrl.search + endpointUrl.hash;
 
-        this.res.write(`event: endpoint\ndata: ${relativeUrlWithSession}\n\n`);
+        await this._connection.write(`event: endpoint\ndata: ${relativeUrlWithSession}\n\n`);
 
-        this._sseResponse = this.res;
-        this.res.on('close', () => {
-            this._sseResponse = undefined;
+        this._connection.onClose(() => {
             this.onclose?.();
         });
     }
@@ -127,7 +202,7 @@ export class SSEServerTransport implements Transport {
      * This should be called when a POST request is made to send a message to the server.
      */
     async handlePostMessage(req: IncomingMessage & { auth?: AuthInfo }, res: ServerResponse, parsedBody?: unknown): Promise<void> {
-        if (!this._sseResponse) {
+        if (!this._started) {
             const message = 'SSE connection not established';
             res.writeHead(500).end(message);
             throw new Error(message);
@@ -153,10 +228,7 @@ export class SSEServerTransport implements Transport {
 
             body =
                 parsedBody ??
-                (await getRawBody(req, {
-                    limit: MAXIMUM_MESSAGE_SIZE,
-                    encoding: ct.parameters.charset ?? 'utf-8'
-                }));
+                (await readIncomingMessage(req, (ct.parameters.charset ?? 'utf-8') as BufferEncoding));
         } catch (error) {
             res.writeHead(400).end(String(error));
             this.onerror?.(error as Error);
@@ -189,17 +261,21 @@ export class SSEServerTransport implements Transport {
     }
 
     async close(): Promise<void> {
-        this._sseResponse?.end();
-        this._sseResponse = undefined;
+        if (!this._started) {
+            return;
+        }
+
+        await this._connection.end();
+        this._started = false;
         this.onclose?.();
     }
 
     async send(message: JSONRPCMessage): Promise<void> {
-        if (!this._sseResponse) {
+        if (!this._started) {
             throw new Error('Not connected');
         }
 
-        this._sseResponse.write(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
+        await this._connection.write(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
     }
 
     /**

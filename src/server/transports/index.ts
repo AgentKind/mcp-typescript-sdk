@@ -1,7 +1,7 @@
 export {
-    WorkerFetchTransport,
-    type WorkerFetchTransportOptions,
-    type WorkerRequestLike,
-    type WorkerResponseLike,
-    type HeadersLike
-} from './workerFetch.js';
+    createFetchSSESession,
+    handleFetchSSEPost,
+    type CreateFetchSSESessionOptions,
+    type FetchSSESession,
+    type HandleFetchSSEPostOptions
+} from './fetchSse.js';

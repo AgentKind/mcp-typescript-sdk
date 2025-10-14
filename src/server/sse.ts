@@ -502,14 +502,3 @@ export async function handleSSEAdapterPost(
         return new Response('Invalid message: ' + String(error), { status: 400 });
     }
 }
-
-// Re-export Fetch-based utilities for modern usage
-export {
-    FetchSSEServerTransport,
-    type FetchSSEServerTransportOptions,
-    createFetchSSESession,
-    handleFetchSSEPost,
-    type CreateFetchSSESessionOptions,
-    type FetchSSESession,
-    type HandleFetchSSEPostOptions
-} from '../cloudflare/sse.js';

@@ -405,7 +405,7 @@ export function createSSESessionAdapter(
 
     // Create adapter that implements ResponseLike interface
     const adapter: ResponseLike = {
-        writeHead: (statusCode: number, headers?: Record<string, string>) => {
+        writeHead: (_statusCode: number, _headers?: Record<string, string>) => {
             // Headers already set on Response
             return adapter;
         },
@@ -429,7 +429,7 @@ export function createSSESessionAdapter(
             pendingClose = true;
             needsFlush = true;
         },
-        on: (event: string, listener: (...args: any[]) => void) => {
+        on: (event: string, listener: (...args: unknown[]) => void) => {
             if (event === 'close') {
                 if (disposed) {
                     // Already closed, call immediately
@@ -444,12 +444,14 @@ export function createSSESessionAdapter(
     // Create SSEServerTransport using the adapter
     const transport = new SSEServerTransport(endpoint, adapter, options.transportOptions);
 
-    // Create Fetch Response with SSE headers
+    // Create Fetch Response with SSE headers including session ID
     const response = new Response(stream, {
         headers: {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache, no-transform',
-            'Connection': 'keep-alive'
+            'Connection': 'keep-alive',
+            'X-Session-Id': transport.sessionId,
+            'mcp-session-id': transport.sessionId  // StreamableHTTP expects this header
         }
     });
 

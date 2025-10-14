@@ -15,7 +15,7 @@ const DEFAULT_SSE_HEADERS = {
 
 interface StreamConnection {
     adapter: SSEConnectionAdapter;
-    createResponse(): Response;
+    response: Response;
     dispose(): void;
 }
 
@@ -26,7 +26,6 @@ function createStreamConnection(signal?: AbortSignal): StreamConnection {
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
     let closed = false;
     let abortHandler: (() => void) | null = null;
-    let response: Response | null = null;
 
     const finish = (action: 'close' | 'error' = 'close', error?: Error) => {
         if (closed) {
@@ -60,6 +59,8 @@ function createStreamConnection(signal?: AbortSignal): StreamConnection {
         }
     });
 
+    const response = new Response(stream, { headers });
+
     const adapter: SSEConnectionAdapter = {
         async setHeaders(custom: Record<string, string>): Promise<void> {
             for (const [key, value] of Object.entries(custom)) {
@@ -92,12 +93,7 @@ function createStreamConnection(signal?: AbortSignal): StreamConnection {
 
     return {
         adapter,
-        createResponse(): Response {
-            if (!response) {
-                response = new Response(stream, { headers });
-            }
-            return response;
-        },
+        response,
         dispose(): void {
             finish();
         }
@@ -112,6 +108,7 @@ export interface CreateFetchSSESessionOptions {
 export interface FetchSSESession {
     transport: SSEServerTransport;
     response: Response;
+    dispose(): void;
 }
 
 export async function createFetchSSESession(
@@ -121,16 +118,11 @@ export async function createFetchSSESession(
     const connection = createStreamConnection(options.signal);
     const transport = new SSEServerTransport(endpoint, connection.adapter, options.transportOptions);
 
-    try {
-        await transport.start();
-        return {
-            transport,
-            response: connection.createResponse()
-        };
-    } catch (error) {
-        connection.dispose();
-        throw error;
-    }
+    return {
+        transport,
+        response: connection.response,
+        dispose: connection.dispose
+    };
 }
 
 export interface HandleFetchSSEPostOptions {

@@ -714,7 +714,8 @@ describe('Fetch SSE adapter', () => {
     const decoder = new TextDecoder();
 
     it('creates a streaming response that emits endpoint and message events', async () => {
-        const { transport, response } = await createFetchSSESession('/messages');
+        const { transport, response, dispose } = await createFetchSSESession('/messages');
+        await transport.start();
         const reader = response.body?.getReader();
         expect(reader).toBeDefined();
         if (!reader) {
@@ -734,10 +735,11 @@ describe('Fetch SSE adapter', () => {
 
         await transport.close();
         await reader.cancel();
+        dispose();
     });
 
     it('forwards POST payloads to the transport', async () => {
-        const { transport } = await createFetchSSESession('/messages');
+        const { transport, dispose } = await createFetchSSESession('/messages');
         const onmessage = jest.fn();
         transport.onmessage = onmessage;
 
@@ -752,5 +754,6 @@ describe('Fetch SSE adapter', () => {
         expect(onmessage).toHaveBeenCalledTimes(1);
 
         await transport.close();
+        dispose();
     });
 });

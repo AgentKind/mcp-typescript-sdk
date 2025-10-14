@@ -33,7 +33,7 @@
 
 ## 5. Cloudflare Worker Example
 
-The Fetch adapter enables a Worker script to host MCP endpoints without Node globals. A minimal Worker looks like this:
+The Fetch adapter enables a Worker script to host MCP endpoints without Node globals. The helper returns `{ transport, response, dispose }` so Workers can clean up streams if the handshake fails or when the client disconnects. A minimal Worker looks like this:
 
 ```ts
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -65,12 +65,24 @@ export default {
         const url = new URL(request.url);
 
         if (request.method === 'GET' && url.pathname === '/sse') {
-            const { transport, response } = await createFetchSSESession('/messages', {
+            const { transport, response, dispose } = await createFetchSSESession('/messages', {
                 signal: request.signal
             });
+
+            try {
+                await server.connect(transport);
+            } catch (error) {
+                dispose();
+                return new Response(`Failed to start SSE session: ${error instanceof Error ? error.message : String(error)}`, {
+                    status: 500
+                });
+            }
+
             sessions.set(transport.sessionId, transport);
-            transport.onclose = () => sessions.delete(transport.sessionId);
-            await server.connect(transport);
+            transport.onclose = () => {
+                dispose();
+                sessions.delete(transport.sessionId);
+            };
             return response;
         }
 

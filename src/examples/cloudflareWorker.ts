@@ -34,13 +34,24 @@ export default {
         const url = new URL(request.url);
 
         if (request.method === 'GET' && url.pathname === '/sse') {
-            const { transport, response } = await createFetchSSESession('/messages', {
+            const { transport, response, dispose } = await createFetchSSESession('/messages', {
                 signal: request.signal
             });
 
+            try {
+                await server.connect(transport);
+            } catch (error) {
+                dispose();
+                return new Response(`Failed to start SSE session: ${error instanceof Error ? error.message : String(error)}`, {
+                    status: 500
+                });
+            }
+
             sessions.set(transport.sessionId, transport);
-            transport.onclose = () => sessions.delete(transport.sessionId);
-            await server.connect(transport);
+            transport.onclose = () => {
+                dispose();
+                sessions.delete(transport.sessionId);
+            };
             return response;
         }
 

@@ -26,6 +26,7 @@ function createStreamConnection(signal?: AbortSignal): StreamConnection {
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
     let closed = false;
     let abortHandler: (() => void) | null = null;
+    let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
     const finish = (action: 'close' | 'error' = 'close', error?: Error) => {
         if (closed) {
@@ -35,6 +36,11 @@ function createStreamConnection(signal?: AbortSignal): StreamConnection {
         if (abortHandler && signal) {
             signal.removeEventListener('abort', abortHandler);
             abortHandler = null;
+        }
+
+        if (keepAliveTimer) {
+            clearInterval(keepAliveTimer);
+            keepAliveTimer = null;
         }
 
         if (action === 'error' && controller) {
@@ -53,6 +59,15 @@ function createStreamConnection(signal?: AbortSignal): StreamConnection {
                 abortHandler = () => finish('error', new Error('Client disconnected'));
                 signal.addEventListener('abort', abortHandler, { once: true });
             }
+
+            const sendKeepAlive = () => {
+                if (closed) {
+                    return;
+                }
+                controller?.enqueue(encoder.encode(`: keep-alive ${Date.now()}\n\n`));
+            };
+
+            keepAliveTimer = setInterval(sendKeepAlive, 15000);
         },
         cancel() {
             finish();

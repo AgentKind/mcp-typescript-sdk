@@ -1,11 +1,34 @@
-import express, { RequestHandler } from 'express';
+import type express from 'express';
+import type { RequestHandler } from 'express';
 import { OAuthClientInformationFull, OAuthClientMetadataSchema } from '../../../shared/auth.js';
-import crypto from 'node:crypto';
-import cors from 'cors';
+import type cors from 'cors';
 import { OAuthRegisteredClientsStore } from '../clients.js';
-import { rateLimit, Options as RateLimitOptions } from 'express-rate-limit';
+import type { rateLimit, Options as RateLimitOptions } from 'express-rate-limit';
 import { allowedMethods } from '../middleware/allowedMethods.js';
 import { InvalidClientMetadataError, ServerError, TooManyRequestsError, OAuthError } from '../errors.js';
+
+// Web Crypto polyfill for crypto operations
+function generateRandomHex(bytes: number): string {
+    if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.getRandomValues) {
+        const array = new Uint8Array(bytes);
+        globalThis.crypto.getRandomValues(array);
+        return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+    throw new Error('Web Crypto API not available');
+}
+
+function generateUUID(): string {
+    if (typeof globalThis.crypto !== 'undefined' && typeof globalThis.crypto.randomUUID === 'function') {
+        return globalThis.crypto.randomUUID();
+    }
+    // Simple UUID v4 polyfill
+    const template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx';
+    return template.replace(/[xy]/g, c => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+}
 
 export type ClientRegistrationHandlerOptions = {
     /**
@@ -47,19 +70,35 @@ export function clientRegistrationHandler({
         throw new Error('Client registration store does not support registering clients');
     }
 
+    // Lazy load Express and related modules (they're peer dependencies)
+    let expressModule: any;
+    let corsModule: any;
+    let rateLimitModule: any;
+
+    try {
+        // @ts-ignore - These are optional peer dependencies
+        expressModule = require('express');
+        // @ts-ignore
+        corsModule = require('cors');
+        // @ts-ignore
+        rateLimitModule = require('express-rate-limit').rateLimit;
+    } catch (error) {
+        throw new Error('Express, cors, and express-rate-limit are required for OAuth handlers. Install them as dependencies.');
+    }
+
     // Nested router so we can configure middleware and restrict HTTP method
-    const router = express.Router();
+    const router = expressModule.Router();
 
     // Configure CORS to allow any origin, to make accessible to web-based MCP clients
-    router.use(cors());
+    router.use(corsModule());
 
     router.use(allowedMethods(['POST']));
-    router.use(express.json());
+    router.use(expressModule.json());
 
     // Apply rate limiting unless explicitly disabled - stricter limits for registration
     if (rateLimitConfig !== false) {
         router.use(
-            rateLimit({
+            rateLimitModule({
                 windowMs: 60 * 60 * 1000, // 1 hour
                 max: 20, // 20 requests per hour - stricter as registration is sensitive
                 standardHeaders: true,
@@ -70,7 +109,7 @@ export function clientRegistrationHandler({
         );
     }
 
-    router.post('/', async (req, res) => {
+    router.post('/', async (req: any, res: any) => {
         res.setHeader('Cache-Control', 'no-store');
 
         try {
@@ -83,7 +122,7 @@ export function clientRegistrationHandler({
             const isPublicClient = clientMetadata.token_endpoint_auth_method === 'none';
 
             // Generate client credentials
-            const clientSecret = isPublicClient ? undefined : crypto.randomBytes(32).toString('hex');
+            const clientSecret = isPublicClient ? undefined : generateRandomHex(32);
             const clientIdIssuedAt = Math.floor(Date.now() / 1000);
 
             // Calculate client secret expiry time
@@ -98,7 +137,7 @@ export function clientRegistrationHandler({
             };
 
             if (clientIdGeneration) {
-                clientInfo.client_id = crypto.randomUUID();
+                clientInfo.client_id = generateUUID();
                 clientInfo.client_id_issued_at = clientIdIssuedAt;
             }
 

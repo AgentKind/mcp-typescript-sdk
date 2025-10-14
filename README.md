@@ -1,6 +1,8 @@
-# MCP TypeScript SDK - Browser & Edge Runtime Compatible Fork
+# mcp-anywhere
 
-> A browser and edge runtime compatible fork of the [official Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+> Browser & edge compatible TypeScript SDK for Model Context Protocol
+
+A fork of the [official Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) that works in Node.js, browsers, and edge runtimes.
 
 ## The Problem
 
@@ -73,7 +75,7 @@ This fork systematically replaces Node.js-specific APIs with universal Web APIs,
 ## Installation
 
 ```bash
-npm install @fractal-mcp
+npm install mcp-anywhere
 ```
 
 ## Requirements

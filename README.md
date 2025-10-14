@@ -25,7 +25,7 @@ This fork systematically replaces Node.js-specific APIs with universal Web APIs,
 
 ### What Changed
 
-#### 🔄 **Transport Modules**
+#### Transport Modules
 
 **`src/server/sse.ts`** and **`src/server/streamableHttp.ts`**
 - Replaced `node:crypto` with `globalThis.crypto` (Web Crypto API)
@@ -34,19 +34,19 @@ This fork systematically replaces Node.js-specific APIs with universal Web APIs,
 - Added `createSSESessionAdapter()` function to create Fetch-compatible SSE sessions for edge runtimes
 
 **`src/server/stdio.ts`** and **`src/client/stdio.ts`**
-- ⚠️ **Still Node.js-only** (by design - stdio is inherently Node-specific)
+- **Still Node.js-only** (by design - stdio is inherently Node-specific)
 - Made safe to import: detects runtime and throws descriptive errors in non-Node environments
 - Uses `globalThis.process` instead of direct imports
 - Lazy-loads Node-specific modules (`cross-spawn`, `node:stream`)
 
-#### 🔐 **Authentication Modules**
+#### Authentication Modules
 
 **`src/server/auth/handlers/register.ts`**
 - Replaced `crypto.randomBytes()` with Web Crypto API
 - Lazy-loaded Express dependencies (`express`, `cors`, `express-rate-limit`) for better tree-shaking
 - Added runtime environment detection
 
-#### 🛠️ **Utility Modules**
+#### Utility Modules
 
 **`src/shared/stdio.ts`** and related files
 - Runtime-safe implementations that work in both Node.js and Web environments
@@ -54,18 +54,18 @@ This fork systematically replaces Node.js-specific APIs with universal Web APIs,
 
 ### Key Features
 
-✅ **Universal Transports**
+**Universal Transports**
 - **SSEServerTransport**: Works in Node.js, browsers, and edge runtimes
 - **StreamableHTTPServerTransport**: Works in Node.js, browsers, and edge runtimes  
 - **StdioServerTransport**: Node.js only (safe to import, runtime-detected)
 
-✅ **Edge Runtime Support**
+**Edge Runtime Support**
 - Cloudflare Workers (V8 isolates)
 - Deno Deploy
 - Vercel Edge Functions
 - Any environment with Web APIs
 
-✅ **100% API Compatible**
+**100% API Compatible**
 - Drop-in replacement for `@modelcontextprotocol/sdk`
 - All official examples work unchanged
 - Same imports, same API surface
@@ -73,76 +73,34 @@ This fork systematically replaces Node.js-specific APIs with universal Web APIs,
 ## Installation
 
 ```bash
-npm install @modelcontextprotocol/sdk
+npm install @fractal-mcp
 ```
+
+## Requirements
+
+**Node.js 16.0.0+** (required for Web Crypto API)
+- `globalThis.crypto.randomUUID()`
+- `globalThis.crypto.getRandomValues()`
+
+**Browsers**: Any modern browser with Web Crypto API support (all evergreen browsers)
+
+**Edge Runtimes**: Cloudflare Workers, Deno Deploy, Vercel Edge Functions, etc.
 
 ## Usage
 
 **Usage is exactly the same as the official SDK!** All examples from the [official documentation](https://github.com/modelcontextprotocol/typescript-sdk) work without modification.
 
-### Example: SSE Server (Works Everywhere)
-
-```typescript
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { z } from 'zod';
-
-const server = new McpServer({
-    name: 'universal-server',
-    version: '1.0.0'
-});
-
-server.registerTool(
-    'echo',
-    {
-        title: 'Echo Tool',
-        description: 'Echo back a message',
-        inputSchema: { text: z.string() },
-        outputSchema: { text: z.string() }
-    },
-    async ({ text }) => ({
-        content: [{ type: 'text', text }],
-        structuredContent: { text }
-    })
-);
-
-// This works in Node.js, browsers, and edge runtimes!
-const transport = new SSEServerTransport('/messages', response);
-        await server.connect(transport);
-```
-
-### Example: Edge Runtime Adapter (Cloudflare Workers, etc.)
-
-```typescript
-import { createSSESessionAdapter } from '@modelcontextprotocol/sdk/server/sse.js';
-
-// In a Cloudflare Worker, Deno Deploy, etc.
-export default {
-    async fetch(request: Request): Promise<Response> {
-        if (request.method === 'GET') {
-            const { transport, response, dispose } = createSSESessionAdapter('/messages', {
-                signal: request.signal,
-            });
-            
-        await server.connect(transport);
-            return response; // Returns a Fetch API Response with SSE stream
-        }
-        // ... handle POST requests
-    }
-};
-```
-
-### ⚠️ Important: Stdio Limitations
+### Important: Stdio Limitations
 
 **StdioServerTransport and StdioClientTransport still require Node.js.** This is by design—stdio is fundamentally a Node.js concept (process.stdin/stdout, child processes).
 
 ```typescript
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-// ✅ Works in Node.js
+// Works in Node.js
 const transport = new StdioServerTransport();
 
-// ❌ Throws clear error in browsers/edge runtimes:
+// Throws clear error in browsers/edge runtimes:
 // "StdioServerTransport is only available in Node.js environments.
 //  Use SSEServerTransport or StreamableHTTPServerTransport for browsers and edge runtimes."
 ```

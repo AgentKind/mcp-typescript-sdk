@@ -27,6 +27,10 @@ function createStreamConnection(signal?: AbortSignal): StreamConnection {
     let closed = false;
     let abortHandler: (() => void) | null = null;
     let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+    let flushTimer: ReturnType<typeof setInterval> | null = null;
+    const pendingChunks: Uint8Array[] = [];
+    let needsFlush = false;
+    let pendingClose = false;
 
     const finish = (action: 'close' | 'error' = 'close', error?: Error) => {
         if (closed) {
@@ -43,10 +47,21 @@ function createStreamConnection(signal?: AbortSignal): StreamConnection {
             keepAliveTimer = null;
         }
 
-        if (action === 'error' && controller) {
-            controller.error(error ?? new Error('Client disconnected'));
-        } else {
-            controller?.close();
+        if (flushTimer) {
+            clearInterval(flushTimer);
+            flushTimer = null;
+        }
+
+        if (controller) {
+            try {
+                if (action === 'error') {
+                    controller.error(error ?? new Error('Client disconnected'));
+                } else {
+                    controller.close();
+                }
+            } catch {
+                // Ignore attempts to close an already-closed controller.
+            }
         }
         closeListeners.forEach(listener => listener());
         closeListeners.clear();
@@ -60,14 +75,43 @@ function createStreamConnection(signal?: AbortSignal): StreamConnection {
                 signal.addEventListener('abort', abortHandler, { once: true });
             }
 
+            const flushQueue = () => {
+                if (!controller || closed) {
+                    return;
+                }
+
+                if (!needsFlush && (!pendingClose || pendingChunks.length === 0)) {
+                    return;
+                }
+
+                needsFlush = false;
+
+                while (pendingChunks.length > 0) {
+                    controller.enqueue(pendingChunks.shift()!);
+                }
+
+                if (pendingClose && pendingChunks.length === 0) {
+                    finish();
+                }
+            };
+
+            flushTimer = setInterval(flushQueue, 5);
+
             const sendKeepAlive = () => {
                 if (closed) {
                     return;
                 }
-                controller?.enqueue(encoder.encode(`: keep-alive ${Date.now()}\n\n`));
+                if (!controller) {
+                    return;
+                }
+                controller.enqueue(encoder.encode(`: keep-alive ${Date.now()}\n\n`));
             };
 
             keepAliveTimer = setInterval(sendKeepAlive, 15000);
+
+            // Ensure any data queued before start is flushed immediately.
+            needsFlush = true;
+            flushQueue();
         },
         cancel() {
             finish();
@@ -86,16 +130,18 @@ function createStreamConnection(signal?: AbortSignal): StreamConnection {
             if (closed) {
                 return;
             }
-            controller?.enqueue(encoder.encode(data));
+            pendingChunks.push(encoder.encode(data));
+            needsFlush = true;
         },
         async end(data?: string): Promise<void> {
             if (closed) {
                 return;
             }
             if (data) {
-                await adapter.write(data);
+                pendingChunks.push(encoder.encode(data));
             }
-            finish();
+            pendingClose = true;
+            needsFlush = true;
         },
         onClose(handler: () => void): void {
             if (closed) {

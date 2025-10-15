@@ -1,29 +1,41 @@
-import process from 'node:process';
-import { Readable, Writable } from 'node:stream';
 import { ReadBuffer, serializeMessage } from '../shared/stdio.js';
 import { JSONRPCMessage } from '../types.js';
 import { Transport } from '../shared/transport.js';
+
+// Check if we're in a Node.js environment
+const isNode = typeof process !== 'undefined' && process.versions != null && process.versions.node != null;
 
 /**
  * Server transport for stdio: this communicates with a MCP client by reading from the current process' stdin and writing to stdout.
  *
  * This transport is only available in Node.js environments.
+ * In browser/edge environments, attempting to use this will throw an error.
  */
 export class StdioServerTransport implements Transport {
     private _readBuffer: ReadBuffer = new ReadBuffer();
     private _started = false;
+    private _stdin: any;
+    private _stdout: any;
 
     constructor(
-        private _stdin: Readable = process.stdin,
-        private _stdout: Writable = process.stdout
-    ) {}
+        stdin?: any,
+        stdout?: any
+    ) {
+        if (!isNode) {
+            throw new Error('StdioServerTransport is only available in Node.js environments. Use SSEServerTransport or StreamableHTTPServerTransport for browsers and edge runtimes.');
+        }
+
+        // In Node.js, process is available globally
+        this._stdin = stdin ?? (globalThis as any).process.stdin;
+        this._stdout = stdout ?? (globalThis as any).process.stdout;
+    }
 
     onclose?: () => void;
     onerror?: (error: Error) => void;
     onmessage?: (message: JSONRPCMessage) => void;
 
     // Arrow functions to bind `this` properly, while maintaining function identity.
-    _ondata = (chunk: Buffer) => {
+    _ondata = (chunk: any) => {
         this._readBuffer.append(chunk);
         this.processReadBuffer();
     };
